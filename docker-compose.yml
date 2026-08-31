@@ -1,0 +1,157 @@
+# docker-compose.yml — Entorno de laboratorio para Fundamentos de Ciberseguridad
+# 
+# USO:
+#   docker compose up -d          # Iniciar todos los servicios
+#   docker compose up -d dvwa     # Solo DVWA
+#   docker compose down           # Detener todo
+#   docker compose exec kali bash # Terminal en Kali
+#
+# REQUISITOS:
+#   - Docker Engine 24.0+
+#   - Docker Compose 2.20+
+#   - 8 GB RAM recomendados (4 GB mínimos)
+#
+# PUERTOS:
+#   4280: DVWA (web vulnerable)
+#   4281: Kali noVNC (escritorio web)
+#   4282: Metasploitable2 (target vulnerable)
+
+services:
+  # ─── Kali Linux con herramientas de seguridad ───
+  kali:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: curso-kali
+    hostname: kali
+    privileged: true
+    stdin_open: true
+    tty: true
+    networks:
+      - lab-net
+    ports:
+      - "4281:8080"   # noVNC web (opcional)
+    volumes:
+      - ./labs:/home/kali/cybersec-lab:rw
+      - lab-state:/var/lab-state
+    command: >
+      bash -c "
+        echo '=== INICIANDO ENTORNO ABC-CYB-101 ===' &&
+        echo 'Menu interactivo: menu_labs' &&
+        echo 'Estado de retos: /var/lab-state/progress' &&
+        tail -f /dev/null
+      "
+    healthcheck:
+      test: ["CMD", "which", "nmap"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # ─── DVWA — Damn Vulnerable Web Application ───
+  dvwa:
+    image: vulnerables/web-dvwa:latest
+    container_name: curso-dvwa
+    ports:
+      - "4280:80"
+    networks:
+      - lab-net
+    restart: unless-stopped
+
+  # ─── Metasploitable2 — Target vulnerable ───
+  # Nota: No existe imagen oficial Docker de Metasploitable2.
+  # Esta es una alternativa ligera con servicios vulnerables.
+  vuln-target:
+    image: tleemcjr/metasploitable2:latest
+    container_name: curso-vuln-target
+    ports:
+      - "4282:80"    # Web
+      - "4283:21"    # FTP
+      - "4284:22"    # SSH
+      - "4285:23"    # Telnet
+      - "4286:445"   # SMB
+      - "4287:3306"  # MySQL
+    networks:
+      - lab-net
+    restart: unless-stopped
+
+  # ─── Loki — almacenamiento de logs (Sesión 21/22) ───
+  # Perfil: siem
+  loki:
+    image: grafana/loki:3.2.0
+    container_name: curso-loki
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - lab-net
+    ports:
+      - "4317:4317"
+    volumes:
+      - loki-data:/loki
+    profiles:
+      - siem
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3100/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ─── Promtail — agente de recolección de logs (Sesión 21/22) ───
+  # Perfil: siem
+  promtail:
+    image: grafana/promtail:3.2.0
+    container_name: curso-promtail
+    command: -config.file=/etc/promtail/config.yaml
+    networks:
+      - lab-net
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./labs/scripts/promtail-config.yaml:/etc/promtail/config.yaml:ro
+    depends_on:
+      loki:
+        condition: service_healthy
+    profiles:
+      - siem
+
+  # ─── Grafana — visualización de logs y dashboards (Sesión 21/22) ───
+  # Perfil: siem
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: curso-grafana
+    networks:
+      - lab-net
+    ports:
+      - "4300:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SERVER_ROOT_URL=http://localhost:4300
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./labs/scripts/grafana-dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./labs/scripts/grafana-datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      loki:
+        condition: service_healthy
+    profiles:
+      - siem
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+networks:
+  lab-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+          gateway: 172.28.0.1
+
+volumes:
+  kali-data:
+  loki-data:
+  grafana-data:
+  lab-state:

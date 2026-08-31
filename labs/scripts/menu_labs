@@ -1,0 +1,185 @@
+#!/bin/bash
+# menu_labs — Menú interactivo de laboratorios ABC-CYB-101
+# Ruta: /usr/local/bin/menu_labs
+# Alias: sudo menu -> menu_labs
+
+set -euo pipefail
+
+LAB_STATE_DIR="/var/lab-state"
+PROGRESS_FILE="${LAB_STATE_DIR}/progress.json"
+STUDENT_ID="${STUDENT_ID:-alumno-$(date +%Y%m%d)}"
+MENU_TITLE="LABORATORIOS — FUNDAMENTOS DE CIBERSEGURIDAD"
+MENU_BACKTITLE="ABC-CYB-101 v2.1 | Estudiante: ${STUDENT_ID}"
+
+# Colores
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+# Directorios
+mkdir -p "${LAB_STATE_DIR}/progress" "${LAB_STATE_DIR}/completed" "${LAB_STATE_DIR}/failed"
+
+# Funciones auxiliares
+log_info() { echo -e "${GREEN}[INFO]${NC} $*"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $*"; }
+
+# Inicializar índice de progreso
+init_progress() {
+    local student_dir="${LAB_STATE_DIR}/progress/${STUDENT_ID}"
+    mkdir -p "${student_dir}"
+    if [ ! -f "${PROGRESS_FILE}" ]; then
+        cat > "${PROGRESS_FILE}" <<EOF
+{
+  "student_id": "${STUDENT_ID}",
+  "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "updated_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "total_core": 60,
+  "passed_core": 0,
+  "failed_core": 0,
+  "pending_core": 60,
+  "challenges": [],
+  "completed": [],
+  "failed": []
+}
+EOF
+    fi
+}
+
+# Actualizar estado de reto
+update_challenge_status() {
+    local challenge_id="$1"
+    local status="$2"
+    local timestamp
+    timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+    python3 /usr/local/lib/lab_state_manager.py \
+        --student-id "${STUDENT_ID}" \
+        --challenge-id "${challenge_id}" \
+        --status "${status}" \
+        --timestamp "${timestamp}" \
+        --state-dir "${LAB_STATE_DIR}"
+}
+
+# Menú principal
+main_menu() {
+    local choice
+    choice=$(whiptail --title "${MENU_TITLE}" --backtitle "${MENU_BACKTITLE}" --menu "Selecciona un módulo:" 20 60 5 \
+        1 "Módulo I — Principios de Ciberseguridad (6 retos CORE)" \
+        2 "Módulo II — Seguridad en Redes y Controles Perimetrales (12 retos CORE)" \
+        3 "Módulo III — Hardening e Identidades (13 retos CORE)" \
+        4 "Módulo IV — Amenazas, Criptografía y CVSS (14 retos CORE)" \
+        5 "Módulo V — Logging, SIEM y Respuesta a Incidentes (15 retos CORE)" \
+        6 "Verificar Progreso y Firma" \
+        7 "Exportar Firma de Progreso" \
+        8 "Salir" 3>&1 1>&2 2>&3) || return 0
+
+    case "${choice}" in
+        1) module_menu "I" " Principios de Ciberseguridad" "6" ;;
+        2) module_menu "II" " Seguridad en Redes" "12" ;;
+        3) module_menu "III" " Hardening e Identidades" "13" ;;
+        4) module_menu "IV" " Amenazas y Criptografía" "14" ;;
+        5) module_menu "V" " Logging, SIEM e IR" "15" ;;
+        6) show_progress ;;
+        7) export_signature ;;
+        8) exit 0 ;;
+    esac
+}
+
+# Submenú por módulo
+module_menu() {
+    local module="$1"
+    local module_name="$2"
+    local total="$3"
+    local choice
+
+    choice=$(whiptail --title "Módulo ${module} — ${module_name}" --backtitle "${MENU_BACKTITLE}" --menu "Retos CORE disponibles:" 20 60 ${total} \
+        $(for i in $(seq 1 "${total}"); do
+            local challenge_id="CORE-MOD${module}-$(printf "%02d" "${i}")"
+            local status="PENDING"
+            if [ -f "${LAB_STATE_DIR}/progress/${STUDENT_ID}/${challenge_id}.json" ]; then
+                status=$(jq -r '.status' "${LAB_STATE_DIR}/progress/${STUDENT_ID}/${challenge_id}.json" 2>/dev/null || echo "PENDING")
+            fi
+            local status_label="[${status}]"
+            echo "${i} \"Reto ${module}.${i} — ${challenge_id} ${status_label}\""
+        done) \
+        "$((total+1))" "Volver al menú principal" 3>&1 1>&2 2>&3) || return 0
+
+    if [ "${choice}" == "$((total+1))" ]; then
+        return 0
+    fi
+
+    local challenge_id="CORE-MOD${module}-$(printf "%02d" "${choice}")"
+    run_challenge "${module}" "${choice}" "${challenge_id}"
+}
+
+# Ejecutar reto específico
+run_challenge() {
+    local module="$1"
+    local num="$2"
+    local challenge_id="$3"
+    local lab_dir="/home/kali/cybersec-lab/module-0${module}"
+    local validator="/opt/labs/validators/module-0${module}/validate-${challenge_id}.sh"
+
+    whiptail --title "Reto ${module}.${num}" --backtitle "${MENU_BACKTITLE}" --msgbox \
+        "Reto: ${challenge_id}\n\nDirectorio: ${lab_dir}\n\nInstrucciones:\n1. Navega al directorio del reto\n2. Sigue las instrucciones del Ebook\n3. Ejecuta el validador cuando termines\n\nPresiona OK para continuar." 15 60
+
+    # Abrir shell en el directorio del reto
+    bash --rcfile <(echo "cd ${lab_dir} && echo 'Directorio: ${lab_dir}' && echo 'Reto: ${challenge_id}' && echo 'Validador: ${validator}' && echo ''")
+
+    # Preguntar si desea ejecutar el validador automáticamente
+    if whiptail --title "Validar Reto" --backtitle "${MENU_BACKTITLE}" --yesno \
+        "¿Deseas ejecutar el validador automático para ${challenge_id}?" 10 60; then
+        if [[ -x "${validator}" ]]; then
+            if "${validator}" "${STUDENT_ID}"; then
+                update_challenge_status "${challenge_id}" "PASSED"
+                whiptail --title "Resultado" --backtitle "${MENU_BACKTITLE}" --msgbox \
+                    "✅ Reto ${challenge_id} aprobado." 10 60
+            else
+                update_challenge_status "${challenge_id}" "FAILED"
+                whiptail --title "Resultado" --backtitle "${MENU_BACKTITLE}" --msgbox \
+                    "❌ Reto ${challenge_id} reprobado. Revisa el archivo de entrega." 10 60
+            fi
+        else
+            whiptail --title "Error" --backtitle "${MENU_BACKTITLE}" --msgbox \
+                "Validador no encontrado: ${validator}" 10 60
+        fi
+    fi
+}
+
+# Mostrar progreso
+show_progress() {
+    local student_dir="${LAB_STATE_DIR}/progress/${STUDENT_ID}"
+    local total=60
+    local passed=0
+    local failed=0
+    local pending=60
+
+    if [ -d "${student_dir}" ]; then
+        passed=$(find "${student_dir}" -name "*.json" -exec jq -r 'select(.status=="PASSED") | empty' {} \; 2>/dev/null | wc -l)
+        failed=$(find "${student_dir}" -name "*.json" -exec jq -r 'select(.status=="FAILED") | empty' {} \; 2>/dev/null | wc -l)
+        pending=$((total - passed - failed))
+    fi
+
+    whiptail --title "Progreso del Estudiante" --backtitle "${MENU_BACKTITLE}" --msgbox \
+        "Estudiante: ${STUDENT_ID}\n\nTotal retos CORE: ${total}\nAprobados: ${passed}\nReprobados: ${failed}\nPendientes: ${pending}\n\nProgreso: $(( passed * 100 / total ))%" 15 60
+}
+
+# Exportar firma de progreso
+export_signature() {
+    local export_file="${LAB_STATE_DIR}/progress/${STUDENT_ID}/firma-progreso-$(date +%Y%m%d).txt"
+    python3 /usr/local/lib/lab_state_manager.py \
+        --student-id "${STUDENT_ID}" \
+        --export "${export_file}" \
+        --state-dir "${LAB_STATE_DIR}"
+    whiptail --title "Firma Exportada" --backtitle "${MENU_BACKTITLE}" --msgbox \
+        "Firma exportada a:\n${export_file}\n\nArchivo listo para entrega." 12 60
+}
+
+# Inicializar y ejecutar menú
+init_progress
+trap 'exit 0' INT TERM
+while true; do
+    main_menu
+done

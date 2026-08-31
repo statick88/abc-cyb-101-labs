@@ -1,0 +1,32 @@
+# Dockerfile hardening para OpenClaw
+# Nivel: Medio-Alto
+# Uso: docker build -f Dockerfile.secure -t openclaw:secure .
+
+FROM ubuntu:22.04
+
+# 1. Usuario no-root
+RUN adduser --disabled-password --gecos "" openclaw
+
+# 2. Limitar recursos
+RUN echo 'openclaw hard nproc 512' >> /etc/security/limits.conf
+RUN echo 'openclaw hard nofile 256' >> /etc/security/limits.conf
+
+# 3. Directorios con permisos correctos
+RUN mkdir /app && chown openclaw:openclaw /app
+
+# 4. Instalar dependencias minimas
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# 5. Healthcheck
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# 6. No correr como root
+USER openclaw
+WORKDIR /app
+
+# 7. Seccomp profile (referencia)
+# Copiar profile de https://docs.docker.com/engine/security/seccomp/
+# Ejecutar con: docker run --security-opt seccomp=seccomp-profile.json ...

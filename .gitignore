@@ -1,0 +1,36 @@
+# Entornos Docker
+docker-compose.override.yml
+.docker/
+
+# Logs y estados locales
+logs/
+*.log
+var/lab-state/
+lab-state/
+
+# Archivos temporales
+tmp/
+temp/
+*.tmp
+*.swp
+*.swo
+
+# Sistema
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.pid
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env
+
+# Validadores temporales
+labs/scripts/validators/.tmp/
